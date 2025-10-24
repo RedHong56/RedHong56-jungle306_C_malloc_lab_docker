@@ -17,6 +17,7 @@
 #include "mm.h"
 #include "memlib.h"
 
+
 /*********************************************************
  * NOTE TO STUDENTS: Before you do anything else, please
  * provide your team information in the following struct.
@@ -34,10 +35,10 @@ team_t team = { //이건 대학 과제라서
     ""};
 
 /* single word (4) or double word (8) alignment */
-#define ALIGNMENT 8
+#define ALIGNMENT 16
 
 /* rounds up to the nearest multiple of ALIGNMENT */
-#define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~0x7)
+#define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~0xf)
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
@@ -46,8 +47,8 @@ team_t team = { //이건 대학 과제라서
 // define : “컴파일 전에 이름 붙이기” 또는 “코드 치환 규칙 만들기”
 
 // 기본 상수 사이즈 정의
-#define WSIZE 4 // 워드 사이즈(헤더, 풋터의 크기)
-#define DSIZE 8 // 더블 워드 사이즈(블록 최소 사이즈)
+#define WSIZE 8 // 워드 사이즈(헤더, 풋터의 크기)
+#define DSIZE 16 // 더블 워드 사이즈(블록 최소 사이즈)
 #define CHUNKSIZE (1<<12) // 초기 가용 블록과 힙 확장을 위한 기본 크기(페이지)
 
 #define MAX(x,y) ((x)>(y) ? (x) : (y)) // 
@@ -56,11 +57,11 @@ team_t team = { //이건 대학 과제라서
 #define PACK(size, alloc) ((size)|(alloc)) // PACK 매크로 : 크기와 할당 비트를 통합해서 헤더와 풋터에 저장할 수 있는 값을 리턴 
 
 /* 인자에 대하여 읽고 쓰기 */
-#define GET(p) (*(unsigned int *)(p)) // GET 매크로 : 인자 p가 참조하는 워드를 읽어서 리턴  //(인자 p는 대개 void* 직접적으로 역참조할 수는 없다) 
-#define PUT(p, val) (*(unsigned int *)(p) = (val)) // PUT 매크로 : 인자 p가 가리키는 워드에 val을 저장
+#define GET(p) (*(unsigned long *)(p)) // GET 매크로 : 인자 p가 참조하는 워드를 읽어서 리턴  //(인자 p는 대개 void* 직접적으로 역참조할 수는 없다) 
+#define PUT(p, val) (*(unsigned long *)(p) = (val)) // PUT 매크로 : 인자 p가 가리키는 워드에 val을 저장
 
 /* 헤더 또는풋터의 size와 할당 비트를 리턴 */
-#define GET_SIZE(p) (GET(p) & ~0x7)
+#define GET_SIZE(p) (GET(p) & ~0xf)
 #define GET_ALLOC(p) (GET(p) & 0x1)
 
 /* 블록 헤더와 풋터를 가리키는 포인터를 리턴 (bp = 블록 포인터) */
@@ -112,7 +113,7 @@ int mm_init(void)
     PUT(heap_listp + (2*WSIZE), PACK(DSIZE, 1)); // Prologue pooter
     PUT(heap_listp + (3*WSIZE), PACK(0, 1)); // Epilogue header
     heap_listp += (2*WSIZE);
-    
+
     /* Extend the empty heap with a free block of CHUNKSIZE bytes */
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL)
         return -1;
@@ -141,21 +142,23 @@ static void place(void *bp, size_t asize)
 {
     size_t csize = GET_SIZE(HDRP(bp));
 
-    if ((csize - asize) >=(2*DSIZE))
-    {
+    if ((csize - asize) >= (2*DSIZE)) {
+        // 앞부분 할당
         PUT(HDRP(bp), PACK(asize, 1));
         PUT(FTRP(bp), PACK(asize, 1));
-        bp = NEXT_BLKP(bp);
-        PUT(HDRP(bp), PACK(csize-asize, 0));
-        PUT(FTRP(bp), PACK(csize-asize, 0));
+
+        // 남은 블록 생성
+        void *next = NEXT_BLKP(bp);
+        size_t remainder = csize - asize;
+        PUT(HDRP(next), PACK(remainder, 0));
+        PUT(FTRP(next), PACK(remainder, 0));
     }
-    else
-    {
+    else {
         PUT(HDRP(bp), PACK(csize, 1));
         PUT(FTRP(bp), PACK(csize, 1));
     }
-    
 }
+
 void *mm_malloc(size_t size)
 {
     size_t asize; // 블록 사이즈 조절
@@ -233,18 +236,25 @@ static void *coalesce(void *bp)
 /* mm_realloc - Implemented simply in terms of mm_malloc and mm_free */
 void *mm_realloc(void *ptr, size_t size)
 {
-    void *oldptr = ptr;
-    void *newptr;
-    size_t copySize;
-
-    newptr = mm_malloc(size);
-    if (newptr == NULL)
+    if (ptr == NULL)
+        return mm_malloc(size);
+    if (size == 0) {
+        mm_free(ptr);
         return NULL;
-    copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE);
+    }
+
+    size_t oldsize = GET_SIZE(HDRP(ptr));   // 전체 블록 크기
+    size_t copySize = oldsize - DSIZE;      // 헤더+풋터(DSIZE) 제외한 payload 크기
+
     if (size < copySize)
         copySize = size;
-    memcpy(newptr, oldptr, copySize);
-    mm_free(oldptr);
+
+    void *newptr = mm_malloc(size);
+    if (newptr == NULL)
+        return NULL;
+
+    memcpy(newptr, ptr, copySize);
+    mm_free(ptr);
     return newptr;
 }
 
