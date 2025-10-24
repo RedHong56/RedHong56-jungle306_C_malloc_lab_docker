@@ -79,7 +79,6 @@ static char *mem_brk; // 힙의 꼭대기 + 1
 static char *mem_max_addr; // 합법적인 힙의 최대주소 +1
 static char *heap_listp; // 저장용 포인터 변수 
 
-static void *last_bp = NULL; // 이 포인터는 “지난번 malloc이 어디서 블록을 찾고 멈췄는가”를 저장하는 역할.
 ////////////////////////extent_heap///////////////////////////////////
 static void *extend_heap(size_t words)
 {
@@ -108,14 +107,13 @@ int mm_init(void)
 {
     if (((heap_listp = mem_sbrk(4*WSIZE))) == (void *)-1) 
         return -1;  
-
+    
     PUT(heap_listp, 0); //Alignment padding
     PUT(heap_listp + (1*WSIZE), PACK(DSIZE, 1)); // Prologue header
     PUT(heap_listp + (2*WSIZE), PACK(DSIZE, 1)); // Prologue pooter
     PUT(heap_listp + (3*WSIZE), PACK(0, 1)); // Epilogue header
     heap_listp += (2*WSIZE);
-    
-    last_bp = heap_listp;
+
     /* Extend the empty heap with a free block of CHUNKSIZE bytes */
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL)
         return -1;
@@ -126,31 +124,18 @@ int mm_init(void)
  * mm_malloc - Allocate a block by incrementing the brk pointer.
  *     Always allocate a block whose size is a multiple of the alignment.
  */
-
-
 static void *find_fit(size_t asize)
-{   
-    void *cur_bp = last_bp;
-    // next-fit은 탐색 방향과 시작점만 기억
+{
+    /* First-fit search */
+    void *bp; // 임식 블록 포인터
 
-    // 더 이상 heap의 맨 처음부터 탐색하지 않는다.
-    // 기억된 포인터 위치에서부터 다음 블록으로 쭉 훑기 시작한다.
-    
-    for (last_bp; GET_SIZE(HDRP(last_bp)) > 0; last_bp = NEXT_BLKP(last_bp)) 
-        {
-            if (!GET_ALLOC(HDRP(last_bp)) && (asize <= GET_SIZE(HDRP(last_bp))))  // 적합한 free 블록을 찾는 순간,
-                return last_bp; // 그 위치를 반환한다.
-        }
-
-    // 힙 끝까지 갔는데 못 찾았다면,
-    // 다시 heap 처음부터 → 탐색 시작점 직전까지 한 바퀴 돌아온다.
-    
-    for (last_bp = heap_listp; last_bp < cur_bp; last_bp = NEXT_BLKP(last_bp)) 
+    // listp 위치부터 계속 확인해가는 것
+    for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) //heap_listp는 탐색의 시작점
     {
-        if (!GET_ALLOC(HDRP(last_bp)) && (asize <= GET_SIZE(HDRP(last_bp)))) 
-            return last_bp; 
+        if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) 
+            return bp;
     }
-    return NULL; 
+    return NULL; /* No fit */
 } 
 
 static void place(void *bp, size_t asize)
@@ -244,8 +229,6 @@ static void *coalesce(void *bp)
         PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0)); // 오른쪽 메모리 블록의 푸터를 변경(왜냐? 그 블록의 푸터는 이제 합쳐진 하나의 블록의 푸터거든)
         bp = PREV_BLKP(bp);
     }
-
-    last_bp = bp; // 병합한것을 last_bp 갱신
     return bp;
 }
 
