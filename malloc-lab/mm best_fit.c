@@ -35,10 +35,10 @@ team_t team = { //이건 대학 과제라서
     ""};
 
 /* single word (4) or double word (8) alignment */
-#define ALIGNMENT 16
+#define ALIGNMENT 8
 
 /* rounds up to the nearest multiple of ALIGNMENT */
-#define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~0xf)
+#define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~0x7)
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
@@ -47,8 +47,8 @@ team_t team = { //이건 대학 과제라서
 // define : “컴파일 전에 이름 붙이기” 또는 “코드 치환 규칙 만들기”
 
 // 기본 상수 사이즈 정의
-#define WSIZE 8 // 워드 사이즈(헤더, 풋터의 크기)
-#define DSIZE 16 // 더블 워드 사이즈(블록 최소 사이즈)
+#define WSIZE 4 // 워드 사이즈(헤더, 풋터의 크기)
+#define DSIZE 8 // 더블 워드 사이즈(블록 최소 사이즈)
 #define CHUNKSIZE (1<<12) // 초기 가용 블록과 힙 확장을 위한 기본 크기(페이지)
 
 #define MAX(x,y) ((x)>(y) ? (x) : (y)) // 
@@ -57,11 +57,11 @@ team_t team = { //이건 대학 과제라서
 #define PACK(size, alloc) ((size)|(alloc)) // PACK 매크로 : 크기와 할당 비트를 통합해서 헤더와 풋터에 저장할 수 있는 값을 리턴 
 
 /* 인자에 대하여 읽고 쓰기 */
-#define GET(p) (*(unsigned long *)(p)) // GET 매크로 : 인자 p가 참조하는 워드를 읽어서 리턴  //(인자 p는 대개 void* 직접적으로 역참조할 수는 없다) 
-#define PUT(p, val) (*(unsigned long *)(p) = (val)) // PUT 매크로 : 인자 p가 가리키는 워드에 val을 저장
+#define GET(p) (*(unsigned int *)(p)) // GET 매크로 : 인자 p가 참조하는 워드를 읽어서 리턴  //(인자 p는 대개 void* 직접적으로 역참조할 수는 없다) 
+#define PUT(p, val) (*(unsigned int *)(p) = (val)) // PUT 매크로 : 인자 p가 가리키는 워드에 val을 저장
 
 /* 헤더 또는풋터의 size와 할당 비트를 리턴 */
-#define GET_SIZE(p) (GET(p) & ~0xf)
+#define GET_SIZE(p) (GET(p) & ~0x7)
 #define GET_ALLOC(p) (GET(p) & 0x1)
 
 /* 블록 헤더와 풋터를 가리키는 포인터를 리턴 (bp = 블록 포인터) */
@@ -130,28 +130,31 @@ int mm_init(void)
 
 static void *find_fit(size_t asize)
 {   
-    void *cur_bp = last_bp;
-    // next-fit은 탐색 방향과 시작점만 기억
+    void *cur_bp = last_bp; //탐색 시작점 save
+    void *best_bp = NULL; // 가장 알맞은 size 저장
+    int best_fit = __INT_MAX__;
 
-    // 더 이상 heap의 맨 처음부터 탐색하지 않는다.
-    // 기억된 포인터 위치에서부터 다음 블록으로 쭉 훑기 시작한다.
-    
-    for (last_bp; GET_SIZE(HDRP(last_bp)) > 0; last_bp = NEXT_BLKP(last_bp)) 
+    for (last_bp; GET_SIZE(HDRP(last_bp)) > 0; last_bp = NEXT_BLKP(last_bp))  // 기억된 포인터 위치에서부터 다음 블록으로 쭉 훑기 시작한다.
         {
-            if (!GET_ALLOC(HDRP(last_bp)) && (asize <= GET_SIZE(HDRP(last_bp))))  // 적합한 free 블록을 찾는 순간,
-                return last_bp; // 그 위치를 반환한다.
+            if (!GET_ALLOC(HDRP(last_bp)) && (asize <= GET_SIZE(HDRP(last_bp))) && best_fit > GET_SIZE(HDRP(last_bp)))  // 적합한 free 블록을 찾는 순간,
+            {
+                best_bp = last_bp;
+                best_fit = GET_SIZE(HDRP(last_bp));
+            }
         }
-
-    // 힙 끝까지 갔는데 못 찾았다면,
-    // 다시 heap 처음부터 → 탐색 시작점 직전까지 한 바퀴 돌아온다.
-    
-    for (last_bp = heap_listp; last_bp < cur_bp; last_bp = NEXT_BLKP(last_bp)) 
+    for (last_bp = heap_listp; last_bp < cur_bp; last_bp = NEXT_BLKP(last_bp) ) // heap 처음부터 → 탐색 시작점 직전까지
     {
-        if (!GET_ALLOC(HDRP(last_bp)) && (asize <= GET_SIZE(HDRP(last_bp)))) 
-            return last_bp; 
+        if (!GET_ALLOC(HDRP(last_bp)) && (asize <= GET_SIZE(HDRP(last_bp))) && best_fit > GET_SIZE(HDRP(last_bp))) 
+            {
+                best_bp = last_bp;
+                best_fit = GET_SIZE(HDRP(last_bp));
+            }
     }
+    if( best_fit != __INT_MAX__)  
+        return best_bp;
     return NULL; 
 } 
+
 
 static void place(void *bp, size_t asize)
 {
