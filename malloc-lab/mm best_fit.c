@@ -130,28 +130,26 @@ int mm_init(void)
 
 static void *find_fit(size_t asize)
 {   
-    void *cur_bp = last_bp; //탐색 시작점 save
-    void *best_bp = NULL; // 가장 알맞은 size 저장
-    int best_fit = __INT_MAX__;
+    void *cur_bp = last_bp;
+    // next-fit은 탐색 방향과 시작점만 기억
 
-    for (last_bp; GET_SIZE(HDRP(last_bp)) > 0; last_bp = NEXT_BLKP(last_bp))  // 기억된 포인터 위치에서부터 다음 블록으로 쭉 훑기 시작한다.
+    // 더 이상 heap의 맨 처음부터 탐색하지 않는다.
+    // 기억된 포인터 위치에서부터 다음 블록으로 쭉 훑기 시작한다.
+    
+    for (last_bp; GET_SIZE(HDRP(last_bp)) > 0; last_bp = NEXT_BLKP(last_bp)) 
         {
-            if (!GET_ALLOC(HDRP(last_bp)) && (asize <= GET_SIZE(HDRP(last_bp))) && best_fit > GET_SIZE(HDRP(last_bp)))  // 적합한 free 블록을 찾는 순간,
-            {
-                best_bp = last_bp;
-                best_fit = GET_SIZE(HDRP(last_bp));
-            }
+            if (!GET_ALLOC(HDRP(last_bp)) && (asize <= GET_SIZE(HDRP(last_bp))))  // 적합한 free 블록을 찾는 순간,
+                return last_bp; // 그 위치를 반환한다.
         }
-    for (last_bp = heap_listp; last_bp < cur_bp; last_bp = NEXT_BLKP(last_bp) ) // heap 처음부터 → 탐색 시작점 직전까지
+
+    // 힙 끝까지 갔는데 못 찾았다면,
+    // 다시 heap 처음부터 → 탐색 시작점 직전까지 한 바퀴 돌아온다.
+    
+    for (last_bp = heap_listp; last_bp < cur_bp; last_bp = NEXT_BLKP(last_bp)) 
     {
-        if (!GET_ALLOC(HDRP(last_bp)) && (asize <= GET_SIZE(HDRP(last_bp))) && best_fit > GET_SIZE(HDRP(last_bp))) 
-            {
-                best_bp = last_bp;
-                best_fit = GET_SIZE(HDRP(last_bp));
-            }
+        if (!GET_ALLOC(HDRP(last_bp)) && (asize <= GET_SIZE(HDRP(last_bp)))) 
+            return last_bp; 
     }
-    if( best_fit != __INT_MAX__)  
-        return best_bp;
     return NULL; 
 } 
 
