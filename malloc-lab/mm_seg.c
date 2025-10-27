@@ -72,48 +72,70 @@ team_t team = { //이건 대학 과제라서
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
 
+/* PRED, SUCC 접근 매크로*/
+#define PRED(bp) *(char**)(bp)
+#define SUCC(bp) *(char**)(bp+DSIZE) 
 
-/* explict pred, succ 접근 매크로*/
-#define PRED(bp)  (*(char **)(bp)) // 첫 4바이트
-#define SUCC(bp)  (*(char **)((bp) + DSIZE)) // 그 다음 4바이트
+//////////////////////segregated 선언/////////////////////////////
 
+
+static void *seglist[10];
+
+int find_index(int size)
+{
+    if (size<16)
+    {   
+        return 0;
+    }
+    else if (16<=size && size<32)
+    {
+        return 1;
+    }
+    else if (32<=size && size<64)
+    {
+        return 2;
+    }
+    else if (64<=size && size<128)
+    {
+        return 3;
+    }
+    else if (128<=size && size<256)
+    {
+        return 4;
+    }
+    else if (256<=size && size<512)
+    {
+        return 5;
+    }
+    else if (512<=size && size<1024)
+    {
+        return 6;
+    }
+    else if (1024<=size && size<2048)
+    {
+        return 7;
+    }
+    else if (2048<=size && size<4096)
+    {
+        return 8;
+    }
+    else // 4096 < size
+    {
+        return 9;
+    }
+}
 //////////////////////////////////////////////////////////////
 /* private global 변수 = static  */
 static char *mem_heap; // 힙의 첫번째 바이트 포인터
 static char *mem_brk; // 힙의 꼭대기 + 1
 static char *mem_max_addr; // 합법적인 힙의 최대주소 +1
 static char *heap_listp; // 저장용 포인터 변수 
-
-// static void *last_bp = NULL; // 이 포인터는 “지난번 malloc이 어디서 블록을 찾고 멈췄는가”를 저장하는 역할.
-static void *free_list_head = NULL; 
-////////////////////////extent_heap///////////////////////////////////
-static void *extend_heap(size_t words)
-{
-    char *bp; //블럭 포인터
-    size_t size;
-
-    /* Allocate an even numer of words to maintain aligment */
-    size = (words % 2) ? (words+1) * WSIZE : words * WSIZE; // 홀 짝 확인후 짝 만들어 정렬
-
-    if((long)(bp = mem_sbrk(size)) == -1) // 힙 확장에 실패했을 때
-        return NULL;
-
-    /* Initialize free block header/footer and the epiloogue header */
-    PUT(HDRP(bp), PACK(size, 0)); // 가용 블록 header
-    PUT(FTRP(bp), PACK(size, 0)); // 가용 블록 footer
-    PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1)); // 새로운 에필로그 header
-
-    /* Coalesce if the previous block was free */
-    return coalesce(bp); // 이전 블록이 free이면 병합(x)
-                         // 양 옆을 확인해서 free된 블록이면 병합 아님 그냥 둠
-}
-
 ////////////////////////mm_init///////////////////////////////////////
 /* mm_init - initialize the malloc package. */
 int mm_init(void)
 {
     if (((heap_listp = mem_sbrk(4*WSIZE))) == (void *)-1) 
-        return -1;  
+        return -1; 
     
     PUT(heap_listp, 0); //Alignment padding
     PUT(heap_listp + (1*WSIZE), PACK(DSIZE, 1)); // Prologue header
@@ -121,6 +143,10 @@ int mm_init(void)
     PUT(heap_listp + (3*WSIZE), PACK(0, 1)); // Epilogue header
     heap_listp += (2*WSIZE);
     
+    for(int i=0; i<10; i++){
+        seglist[i] =NULL;
+    }
+
     // last_bp = heap_listp;
     /* Extend the empty heap with a free block of CHUNKSIZE bytes */
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL)
@@ -133,44 +159,58 @@ int mm_init(void)
  *     Always allocate a block whose size is a multiple of the alignment.
  */
 
+static void *extend_heap(size_t words)
+{
+    char *bp;
+    size_t size;
+
+    /* Allocate an even number of words to maintain alignment */
+    size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
+    if ((long)(bp = mem_sbrk(size)) == -1) //증가 되지 않으면 리턴 때리기
+        return NULL;
+
+    /* Initialize free block header/footer and the epilogue header */
+    PUT(HDRP(bp), PACK(size, 0)); /* Free block header */
+    PUT(FTRP(bp), PACK(size, 0)); /* Free block footer */
+    PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1)); /* New epilogue header */
+
+    /* Coalesce if the previous block was free */
+    return coalesce(bp);
+}
 
 static void *find_fit(size_t asize)
 {   
-    void *current = free_list_head;
-    while(current != NULL) {
-        if (GET_SIZE(HDRP(current))>= asize)
-            return current;
-        current = SUCC(current);
+    for (int idx = find_index(asize); idx < 10; idx++)
+    {
+        void *cur = seglist[idx];
+        while (cur != NULL)
+        {
+            if(GET_SIZE(HDRP(cur)) > asize)
+                return cur;
+            cur = SUCC(cur);
+        }
     }
-    return NULL; 
+    return NULL;
 } 
 
 static void place(void *bp, size_t asize)
 {
     size_t csize = GET_SIZE(HDRP(bp));
+    int idx = find_index(csize); // 블록의 사이즈
+    delete_free_list(idx, bp);
 
-    remove_free_block(bp); 
-
-    if ((csize - asize) >= (3*DSIZE)) {
-        
-        // 앞부분 할당 // 할당 크기만큼 제거
+    if ((csize - asize) >= (3*DSIZE)) // 할당하고 사이즈가 남을 때
+    {
+        idx = find_index(csize-asize);
         PUT(HDRP(bp), PACK(asize, 1));
         PUT(FTRP(bp), PACK(asize, 1));
-
-        // 남은 블록 생성
-        void *next = NEXT_BLKP(bp);
-        size_t remainder = csize - asize;
-        PUT(HDRP(next), PACK(remainder, 0));
-        PUT(FTRP(next), PACK(remainder, 0));
-
-        // 여기 추가!! 할당시 pred succ null 처리
-        PRED(next) = NULL;
-        SUCC(next) = NULL;
-
-        insert_free_block(next); // 나머지 free 리스트에 추가
+        void *remain_bp = NEXT_BLKP(bp);
+        PUT(HDRP(remain_bp), PACK(csize-asize, 0));
+        PUT(FTRP(remain_bp), PACK(csize-asize, 0));
+        insert_free_list(idx, remain_bp);
     }
-
-    else {
+    else 
+    {
         PUT(HDRP(bp), PACK(csize, 1));
         PUT(FTRP(bp), PACK(csize, 1));
     }
@@ -178,42 +218,39 @@ static void place(void *bp, size_t asize)
 
 void *mm_malloc(size_t size)
 {
-    size_t asize; // 블록 사이즈 조절
-    size_t extendsize; // 맞지 않을경우 확장할 양
+    size_t asize;
+    size_t extendsize;
     char *bp;
 
-    //잘못된 요청 무시
     if(size == 0)
         return NULL;
-
-    // 오버헤드 포함해서 블럭 사이즈 조절함
-    if (size <= DSIZE)
-        asize = 2*DSIZE;
+    
+    if(size <=  2* DSIZE)
+        asize = 3 * DSIZE; // 4+8+8+4
     else
-        asize = DSIZE *((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
+        asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
 
-    // 알맞는 가용 리스트 탐색
-    if((bp = find_fit(asize)) != NULL){
+    //Search
+    if ((bp = find_fit(asize)) != NULL)
+    {
         place(bp, asize);
         return bp;
     }
-
-    // 맞지않음 더 많은 메모리 확보하고 다른 블럭으로 고고씽
     extendsize = MAX(asize, CHUNKSIZE);
     if((bp = extend_heap(extendsize/WSIZE)) == NULL)
         return NULL;
-    place(bp, asize);
-    return bp; 
+    place(bp,asize);
+    return bp;
 }
 ////////////////////////mm_free///////////////////////////////////////
 /* mm_free - Freeing a block does nothing.*/
-void mm_free(void *ptr) //해제하려는 포인터
+void mm_free(void *bp) //해제하려는 포인터
 {
-    size_t size = GET_SIZE(HDRP(ptr));//해제하려는 블록의 헤더에서 크기 정보를 가져오기
+    size_t size = GET_SIZE(HDRP(bp));
 
-    PUT(HDRP(ptr), PACK(size, 0)); // 헤더에 size 0 넣고 가용가능하다는걸 기입
-    PUT(FTRP(ptr), PACK(size, 0)); // 풋터에도 같은내용을 써주고 (이 부분은 병합 과정에서 판단할 때 사용)
-    coalesce(ptr);
+    PUT(HDRP(bp), PACK(size, 0));
+    PUT(FTRP(bp), PACK(size, 0));
+    coalesce(bp);
 }
 //////////////////////// coalesce  ///////////////////////////////////
 static void *coalesce(void *bp)
@@ -221,22 +258,25 @@ static void *coalesce(void *bp)
     size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp))); //이전 블록의 가용 상태
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp))); //다음 블록의 가용 상태
     size_t size = GET_SIZE(HDRP(bp));
-
+    int idx;
     // CASE 1 : 양쪽 꽉 막힘
     if(prev_alloc && next_alloc){
-        insert_free_block(bp);
+        idx= find_index(GET_SIZE(HDRP(bp)));
+        insert_free_list(idx, bp);
         return bp;
     }
     // CASE 2 : 뒤가 비었음
     else if(prev_alloc && !next_alloc){
-        remove_free_block(NEXT_BLKP(bp));
+        idx = find_index(GET_SIZE(HDRP(NEXT_BLKP(bp))));
+        delete_free_list(idx, NEXT_BLKP(bp));
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
         PUT(HDRP(bp), PACK(size, 0));
         PUT(FTRP(bp), PACK(size, 0));
     }
     // CASE 3 : 앞이 비었음
     else if (!prev_alloc && next_alloc){
-        remove_free_block(PREV_BLKP(bp));
+        idx = find_index(GET_SIZE(HDRP(PREV_BLKP(bp))));
+        delete_free_list(idx, PREV_BLKP(bp));
         size += GET_SIZE(HDRP(PREV_BLKP(bp)));
         PUT(FTRP(bp), PACK(size, 0));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
@@ -244,17 +284,18 @@ static void *coalesce(void *bp)
     }
     // CASE 4 : 양쪽 텅텅
     else{
-        remove_free_block(NEXT_BLKP(bp));
-        remove_free_block(PREV_BLKP(bp));
+        idx = find_index(GET_SIZE(HDRP(NEXT_BLKP(bp))));
+        delete_free_list(idx, NEXT_BLKP(bp));
+        idx = find_index(GET_SIZE(HDRP(PREV_BLKP(bp))));
+        delete_free_list(idx, PREV_BLKP(bp));
         size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(HDRP(NEXT_BLKP(bp))); // 양쪽 사이즈 더 해주고
-
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0)); // 왼쪽 메모리 블록의 헤더를 변경(왜냐? 그 블록의 헤더는 이제 합쳐진 하나의 블록의 헤더거든)
         PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0)); // 오른쪽 메모리 블록의 푸터를 변경(왜냐? 그 블록의 푸터는 이제 합쳐진 하나의 블록의 푸터거든)
-        
         bp = PREV_BLKP(bp);
     }
-    insert_free_block(bp);
-    // last_bp = bp; // 병합한것을 last_bp 갱신
+
+    idx = find_index(GET_SIZE(HDRP(bp)));
+    insert_free_list(idx, bp);
     return bp;
 }
 
@@ -283,51 +324,36 @@ void *mm_realloc(void *ptr, size_t size)
     mm_free(ptr);
     return newptr;
 }
-////////////////////////explict///////////////////////////////////////
-
-void insert_free_block(void *bp)
+//////////////////////////segregated/////////////////////////////////////
+void insert_free_list(int idx, void *bp)
 {
-    if(free_list_head == NULL)
-    {   
-        PRED(bp) = NULL; // 그 주소안에 값을 넣어야하기때문
+    if (seglist[idx] == NULL){ // 헤드없을때
+        seglist[idx] = bp;
+        PRED(bp) = NULL;
         SUCC(bp) = NULL;
-        free_list_head = bp;
         return;
     }
-    void *cur=free_list_head;
-    while (SUCC(cur) != NULL)
-        cur = SUCC(cur); // 다음 free 리스트 훓기
-    
-    // 최종적인 cur 은 next가 없는 cur
-    SUCC(cur) = bp;
-    PRED(bp) = cur;
-    SUCC(bp) = NULL;
-    return;
+    void *temp = seglist[idx];
+    seglist[idx] = bp;
+    PRED(bp) = NULL;
+    SUCC(bp) = temp;
+    PRED(temp) = bp;
 }
 
-void remove_free_block(void *bp)
+void delete_free_list(int idx, void *bp)
 {
-    // printf("bp=%p PRED(bp)=%p SUCC(bp)=%p\n", bp, PRED(bp), SUCC(bp));
-    if(bp == free_list_head) // 헤드 일때
-    { 
-        if(SUCC(free_list_head) == NULL)
-        {
-            free_list_head = NULL;
-            return;    
-        }
-        free_list_head = SUCC(bp); // 헤드 바꿔주고
-        PRED(SUCC(bp)) = NULL;
-        return;
+    void *pred = PRED(bp);
+    void *succ = SUCC(bp);
+    // case 1 : bp가 헤드
+    if (pred == NULL) {
+        seglist[idx] = succ;          // 헤드를 다음 노드로 변경
+        if (succ != NULL)
+            PRED(succ) = NULL;        // 새 헤드의 pred는 NULL
     }
-    else if (SUCC(bp) == NULL) // tail
-    {
-        SUCC(PRED(bp)) = NULL;
-        PRED(bp) = NULL;
-        return;
+    // case 2 : bp가 헤드가 아닌 경우
+    else {
+        SUCC(pred) = succ;            // pred → succ 연결
+        if (succ != NULL)
+            PRED(succ) = pred;        // succ ← pred 연결
     }
-    SUCC(PRED(bp)) = SUCC(bp); // bp의 앞에 있는 놈의 next = bp의 next
-    PRED(SUCC(bp)) = PRED(bp);
-    SUCC(bp) = NULL;
-    PRED(bp) = NULL;
-    return;
 }
