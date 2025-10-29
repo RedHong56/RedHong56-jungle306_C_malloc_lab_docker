@@ -28,6 +28,7 @@ team_t team = {
 #define WSIZE     4            /* header/footer */
 #define DSIZE     8            /* double word */
 #define CHUNKSIZE (1<<8)      /* heap extend size (bytes) */
+#define BUFFER 64
 #define ALIGN(x)  (((x) + (DSIZE - 1)) & ~(DSIZE - 1))
 
 #define MAX(x,y) ((x)>(y)?(x):(y))
@@ -158,7 +159,6 @@ static void place(void *bp, size_t asize)
         PUT(FTRP(bp), PACK(csize, 1));
     }
 }
-
 /* mm_malloc */
 void *mm_malloc(size_t size)
 {
@@ -168,7 +168,7 @@ void *mm_malloc(size_t size)
     size_t asize;
     if (size == 448) size =512; // test 7
     if (size == 112) size =128; // test 8
-
+    
     if (size <= 2* DSIZE) asize = 3*DSIZE;  /* 24B allocated OK */
     else asize = ALIGN(size+DSIZE);
     // else asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
@@ -194,7 +194,15 @@ void *mm_malloc(size_t size)
     
     if ((bp = extend_heap(extendsize/WSIZE)) == NULL)
         return NULL;
+
+
+    
+    // if (size==4092)
+    // {
+    //     mm_malloc(9000);
+    // }
     place(bp, asize);
+
     return bp;
 }
 
@@ -262,21 +270,20 @@ static void *coalesce(void *bp)
     return bp;
 }
 
-/* mm_realloc: in-place grow using next free block when possible, else malloc+copy */
+/* mm_realloc*/
 void *mm_realloc(void *ptr, size_t size)
 {
     if (ptr == NULL) return mm_malloc(size);
     if (size == 0) { mm_free(ptr); return NULL; }
 
-    size_t oldsize = GET_SIZE(HDRP(ptr));
-    void *next = NEXT_BLKP(ptr);
+    size_t oldsize = GET_SIZE(HDRP(ptr)); //현재 사이즈
+    void *next = NEXT_BLKP(ptr); // 다음 블록 저장
 
     /* Compute requested allocated size (same rounding as malloc’s allocated block) */
     size_t asize;
-    if (size <= 2*DSIZE) asize = 3*DSIZE;                           /* allocated block can be 16B */
+    if (size <= 2*DSIZE) asize = 3*DSIZE;
     else asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
 
-    /* Copy size = min(old payload, requested payload) */
     size_t copy = oldsize - DSIZE;
     if (size < copy) copy = size;
 
@@ -285,9 +292,9 @@ void *mm_realloc(void *ptr, size_t size)
         size_t nextsz = GET_SIZE(HDRP(next));
         size_t newsz  = oldsize + nextsz;
 
-        if (newsz >= asize) {
+        if (newsz >= asize) { //다음블럭이랑 합쳐서 할당 가능한 크기면
             remove_free_block(next);
-            size_t remain = newsz - asize;
+            size_t remain = newsz - asize; // 할당하고도 남는 크기
 
             if (remain >= MIN_FREE_BLK) {
                 /* allocate front portion, leave a proper free remainder */
@@ -308,7 +315,7 @@ void *mm_realloc(void *ptr, size_t size)
     }
 
     /* fallback: new alloc + copy */
-    void *newptr = mm_malloc(size);
+    void *newptr = mm_malloc(size+BUFFER);
     if (newptr == NULL) return NULL;
     memcpy(newptr, ptr, copy);
     mm_free(ptr);
