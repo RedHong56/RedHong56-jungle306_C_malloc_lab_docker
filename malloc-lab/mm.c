@@ -130,25 +130,6 @@ static void *find_fit(size_t asize)
     return best;
 }
 
-// next-fit
-// static void *find_fit(size_t asize)
-// {
-//     void *cur;
-//     for(cur = last_bp; cur != NULL; cur = SUCC(cur))
-//     {
-//         size_t csize = GET_SIZE(HDRP(cur));
-//         if (csize>asize)
-//             return cur;
-//     }
-//     for (cur=free_list_head; cur < last_bp; cur = SUCC(cur))
-//     {
-//         size_t csize = GET_SIZE(HDRP(cur));
-//         if (csize>asize)
-//             return cur;
-//     }
-//     return NULL;
-// }
-
 /* place: allocate asize in bp; split if remainder can hold a free block */
 static void place(void *bp, size_t asize)
 {
