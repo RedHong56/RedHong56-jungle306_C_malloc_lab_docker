@@ -28,6 +28,7 @@ team_t team = {
 #define WSIZE     4            /* header/footer */
 #define DSIZE     8            /* double word */
 #define CHUNKSIZE (1<<12)      /* heap extend size (bytes) */
+#define ALIGN(x)  (((x) + (DSIZE - 1)) & ~(DSIZE - 1))
 
 #define MAX(x,y) ((x)>(y)?(x):(y))
 
@@ -84,7 +85,7 @@ int mm_init(void)
     heap_listp += (2*WSIZE);
 
     free_list_head = NULL;
-    last_bp = heap_listp;
+    // last_bp = heap_listp;
     /* Extend the heap with a free block */
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL)
         return -1;
@@ -97,6 +98,7 @@ static void *extend_heap(size_t words)
 {
     char *bp;
     size_t size = (words % 2) ? (words+1)*WSIZE : words*WSIZE;
+ 
     if ((long)(bp = mem_sbrk(size)) == -1)
         return NULL;
 
@@ -104,12 +106,14 @@ static void *extend_heap(size_t words)
     PUT(HDRP(bp), PACK(size, 0));                 /* Free block header */
     PUT(FTRP(bp), PACK(size, 0));                 /* Free block footer */
     PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));         /* New epilogue header */
+    // PRED(bp) = NULL;
+    // SUCC(bp) = NULL;
 
     /* Coalesce with previous if possible, and insert */
     return coalesce(bp);
 }
 
-/* find_fit: best-fit over explicit free list only */
+// best-fit
 static void *find_fit(size_t asize)
 {
     void *best = NULL;
@@ -120,12 +124,30 @@ static void *find_fit(size_t asize)
         if (sz >= asize && sz < bestsz) {
             best = p;
             bestsz = sz;
-            if (bestsz == asize) break; // perfect fit
+           if (bestsz == asize) break; // perfect fit
         }
     }
     return best;
 }
 
+// next-fit
+// static void *find_fit(size_t asize)
+// {
+//     void *cur;
+//     for(cur = last_bp; cur != NULL; cur = SUCC(cur))
+//     {
+//         size_t csize = GET_SIZE(HDRP(cur));
+//         if (csize>asize)
+//             return cur;
+//     }
+//     for (cur=free_list_head; cur < last_bp; cur = SUCC(cur))
+//     {
+//         size_t csize = GET_SIZE(HDRP(cur));
+//         if (csize>asize)
+//             return cur;
+//     }
+//     return NULL;
+// }
 
 /* place: allocate asize in bp; split if remainder can hold a free block */
 static void place(void *bp, size_t asize)
@@ -161,7 +183,8 @@ void *mm_malloc(size_t size)
     /* Adjust block size: header+footer included, 8B aligned */
     size_t asize;
     if (size <= DSIZE) asize = 3*DSIZE;  /* 24B allocated OK */
-    else asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
+    else asize = ALIGN(size+DSIZE);
+    // else asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
 
     /* For free blocks (when split happens) we enforce MIN_FREE_BLK on the remainder,
        but allocated block can be 16B (header+footer+8B payload). */
@@ -173,6 +196,15 @@ void *mm_malloc(size_t size)
     }
 
     size_t extendsize = MAX(asize, CHUNKSIZE);
+
+    void *new_bp = PREV_BLKP((char*)mem_heap_hi()+1);
+    if (!GET_ALLOC(HDRP(new_bp))) //mem_heap_hi
+    {
+        size_t want = GET_SIZE(HDRP(new_bp));
+        size_t needsize = extendsize - want;
+        extendsize = ALIGN(needsize);
+    }
+
     if ((bp = extend_heap(extendsize/WSIZE)) == NULL)
         return NULL;
     place(bp, asize);
@@ -196,13 +228,13 @@ static void *coalesce(void *bp)
     size_t size = GET_SIZE(HDRP(bp));
 
     /* Safe prev_alloc computation: if prev would cross prologue, treat as allocated */
-    size_t prev_alloc;
-    if (HDRP(PREV_BLKP(bp)) < (heap_listp - WSIZE)) {  /* prologue payload = heap_listp; prologue hdr at heap_listp-WSIZE */
-        prev_alloc = 1;
-    } else {
-        prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
-    }
-
+    // size_t prev_alloc;
+    // if (HDRP(PREV_BLKP(bp)) < (heap_listp - WSIZE)) {  /* prologue payload = heap_listp; prologue hdr at heap_listp-WSIZE */
+    //     prev_alloc = 1;
+    // } else {
+    //     prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
+    // }
+    size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
 
     if (prev_alloc && next_alloc) {
@@ -223,18 +255,18 @@ static void *coalesce(void *bp)
         /* Case 3: merge with prev */
         remove_free_block(PREV_BLKP(bp));
         size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-        PUT(FTRP(bp), PACK(size, 0));
-        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
         bp = PREV_BLKP(bp);
+        PUT(HDRP(bp), PACK(size, 0));
+        PUT(FTRP(bp), PACK(size, 0));
     }
     else {
         /* Case 4: merge both sides */
         remove_free_block(NEXT_BLKP(bp));
         remove_free_block(PREV_BLKP(bp));
         size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(HDRP(NEXT_BLKP(bp)));
-        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
-        PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
         bp = PREV_BLKP(bp);
+        PUT(HDRP(bp), PACK(size, 0));
+        PUT(FTRP(bp), PACK(size, 0));
     }
 
     PRED(bp) = NULL; SUCC(bp) = NULL;
@@ -319,7 +351,7 @@ static void remove_free_block(void *bp)
     if (pred == NULL) {
         /* removing head */
         free_list_head = succ;
-        if (succ) PRED(succ) = NULL;
+        if (succ) PRED(succ) = NULL; // succ = 
     } else {
         SUCC(pred) = succ;
         if (succ) PRED(succ) = pred;
