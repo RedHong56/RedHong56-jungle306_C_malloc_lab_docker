@@ -5,6 +5,7 @@
         "cstdio": "c",
         "type_traits": "c",
         "new": "c",
-        "typeinfo": "c"
+        "typeinfo": "c",
+        "cmath": "c"
     }
 }
